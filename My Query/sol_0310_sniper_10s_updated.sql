@@ -1,18 +1,18 @@
 WITH
 constants AS (
     SELECT
-        TIMESTAMP '2025-11-14' AS startDate,
+        (NOW() - INTERVAL '5' day) AS startDate,
         0 AS min_buy_mc,
-        50 AS max_buy_mc,
+        20 AS max_buy_mc,
         0 AS min_token_age,
         10 AS max_token_age,
         0 AS min_first_buy,
         100 AS max_first_buy,
         0 AS min_total_buy,
         100 AS max_total_buy,
-        3 AS rise_filter,
-        600 AS rise_filter_time,
-        20 AS dump_percent,
+        2.5 AS rise_filter,
+        150 AS rise_filter_time,
+        40 AS dump_percent,
         true AS include_pump,
         true AS include_launchlab,
         true AS include_meteora,
@@ -26,7 +26,7 @@ meteora_bonding_configs AS (
         post_migration_token_supply / power(10, token_decimal) AS post_supply,
         quote_mint
     FROM meteora_solana.dynamic_bonding_curve_evt_evtcreateconfig
-    WHERE evt_block_time >= TIMESTAMP '2025-09-20'
+    WHERE evt_block_time >= (NOW() - INTERVAL '30' day)
       AND quote_mint IN ('So11111111111111111111111111111111111111112', 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v')
 ),
 meteora_bonding_tokens AS (
@@ -41,7 +41,7 @@ meteora_bonding_tokens AS (
         evt_tx_signer AS dev
     FROM meteora_solana.dynamic_bonding_curve_evt_evtinitializepool
     INNER JOIN meteora_bonding_configs c ON c.config = meteora_solana.dynamic_bonding_curve_evt_evtinitializepool.config
-    WHERE evt_block_time >= TIMESTAMP '2025-09-20'
+    WHERE evt_block_time >= (NOW() - INTERVAL '30' day)
 ),
 meteora_migrated_tokens AS (
     SELECT 
@@ -54,7 +54,7 @@ meteora_migrated_tokens AS (
         call_block_time AS block_time
     FROM meteora_solana.dynamic_bonding_curve_call_migration_damm_v2 
     INNER JOIN meteora_bonding_tokens t ON t.token = meteora_solana.dynamic_bonding_curve_call_migration_damm_v2.account_base_mint
-    WHERE call_block_time >= TIMESTAMP '2025-09-20'
+    WHERE call_block_time >= (NOW() - INTERVAL '30' day)
 ),
 trades AS (
     SELECT
@@ -172,7 +172,7 @@ migrations AS (
         evt_block_time AS mig_block_time,
         evt_block_slot AS mig_block_slot
     FROM pumpdotfun_solana.pump_evt_completeevent
-    WHERE evt_block_time >= TIMESTAMP '2025-09-20'
+    WHERE evt_block_time >= (NOW() - INTERVAL '30' day)
         
     UNION ALL
 
@@ -181,7 +181,7 @@ migrations AS (
         call_block_time AS mig_block_time,
         call_block_slot AS mig_block_slot
     FROM raydium_solana.raydium_launchpad_call_migrate_to_cpswap
-    WHERE call_block_time >= TIMESTAMP '2025-09-20'
+    WHERE call_block_time >= (NOW() - INTERVAL '30' day)
 
     UNION ALL
 
@@ -196,7 +196,7 @@ creators AS (
         token,
         block_time,
         dev
-    FROM dune.schoolelite564.result_creators
+    FROM dune.sutomo13_team_e2b87304.result_creators
 
     UNION ALL
 
@@ -259,7 +259,7 @@ trade_aggregates AS (
             ROW_NUMBER() OVER (PARTITION BY wallet, token ORDER BY block_slot ASC) AS rn,
             -- Find the first point where cumulative buy token = cumulative sell token
             CASE 
-                WHEN cum_sell_token >= cum_buy_token * 0.95 AND cum_buy_token > 0 AND cum_sell_token < cum_buy_token * 1.05THEN
+                WHEN cum_sell_token >= cum_buy_token * 0.95 AND cum_buy_token > 0 AND cum_sell_token < cum_buy_token * 1.05 THEN
                     ROW_NUMBER() OVER (
                         PARTITION BY wallet, token
                         ORDER BY block_slot ASC
@@ -341,6 +341,7 @@ initialTradeTokens_temp AS (
         ta.valid_buy_sol,
         ta.valid_sell_sol,
         (ta.min_sell_time - ta.min_buy_time) AS deltaTimeForBS,
+        DATE_DIFF('second', ta.min_buy_time, ta.min_sell_time) AS first_buy_to_first_sell_seconds,
         CASE WHEN ta.total_buy_sol > 0 THEN ta.total_sell_sol / ta.total_buy_sol ELSE 0 END AS pnl,
         CASE WHEN ta.valid_buy_sol > 0 THEN ta.valid_sell_sol / ta.valid_buy_sol ELSE 0 END AS hold_pnl,
         ta.hold_time,
@@ -353,12 +354,12 @@ initialTradeTokens_temp AS (
         CASE WHEN fb.buy_block_slot < COALESCE(tath.ath_block_slot, 0) THEN 1 ELSE 0 END AS is_buy_before_ath,
         CASE WHEN ta.min_sell_time > m.mig_block_time THEN 1 ELSE 0 END AS is_sell_after_mig,
         CASE WHEN fb.buy_block_slot < COALESCE(m.mig_block_slot, 0) THEN 1 ELSE 0 END AS is_mig,
-        CASE WHEN fb.buy_block_slot >= COALESCE(m.mig_block_slot, 0) - 2 AND COALESCE(m.mig_block_slot, 0) > 0 THEN 1 ELSE 0 END AS is_bundle,
+        CASE WHEN fb.buy_block_slot >= COALESCE(m.mig_block_slot, 0) - 2 AND fb.buy_block_slot <= COALESCE(m.mig_block_slot, 0) AND COALESCE(m.mig_block_slot, 0) > 0 THEN 1 ELSE 0 END AS is_bundle,
         fb.buy_block_slot,
         COALESCE(m.mig_block_slot, 0) AS mig_block_slot,
         date_diff(
             'second',
-            COALESCE(c.block_time, TIMESTAMP '2025-08-15'),
+            COALESCE(c.block_time, (NOW() - INTERVAL '40' day)),
             fb.buy_block_time
         ) AS token_age,
         date_diff('second', fb.buy_block_time, m.mig_block_time) AS mig_time,
@@ -370,7 +371,7 @@ initialTradeTokens_temp AS (
     LEFT JOIN tokens_ath tath ON ta.token = tath.token
     LEFT JOIN migrations m ON ta.token = m.token
     LEFT JOIN creators c ON ta.token = c.token
-    LEFT JOIN dune.schoolelite564.result_fake_tokens fake ON ta.token = fake.token
+    LEFT JOIN dune.sutomo13_team_e2b87304.result_fake_tokens fake ON ta.token = fake.token
     LEFT JOIN trades_by_slot tbs ON ta.token = tbs.token AND ta.firstTradeSlot = tbs.block_slot
 ),
 initialTradeTokens AS (
@@ -456,20 +457,23 @@ filteredTokens AS (
             ) AND
             first_buy_sol >= c.min_first_buy AND first_buy_sol <= c.max_first_buy AND
             total_buy_sol >= c.min_total_buy AND total_buy_sol <= c.max_total_buy
+            AND COALESCE(it.is_fake, 0) = 0
+            AND COALESCE(it.is_creator, 0) = 0
         ) AS is_real,
         (
             CASE 
-                WHEN token_age < 600 THEN 100
-                WHEN token_age < 900 THEN 90
-                WHEN token_age < 1200 THEN 80
+                WHEN token_age < 10 THEN 120
+                WHEN token_age < 60 THEN 100
+                WHEN token_age < 300 THEN 90
+                WHEN token_age < 600 THEN 80
                 WHEN token_age < 3600 THEN 70
                 ELSE 60
             END
         ) AS age_metrics,
         (
             CASE
-                WHEN first_buy_mc < 15 THEN 100
-                WHEN first_buy_mc < 30 THEN 85
+                WHEN first_buy_mc < 10 THEN 100
+                WHEN first_buy_mc < 20 THEN 85
                 ELSE 70
             END
         ) AS mc_metrics,
@@ -551,12 +555,15 @@ walletInfo AS (
         SUM(CASE WHEN is_real THEN LN(pnl + 1) / LN(2) ELSE 0 END) / COUNT_IF(is_real) AS pnl_log,
         SUM(CASE WHEN is_real THEN LN(hold_pnl + 1) / LN(2) ELSE 0 END) / COUNT_IF(is_real) AS hold_pnl_log,
         SUM(CASE WHEN is_real THEN LN(ath_mc / first_buy_mc) / LN(2) ELSE 0 END) / COUNT_IF(is_real) AS rise_log,
-        SUM(CASE WHEN is_real THEN LN(valid_rise) / LN(2) ELSE 0 END) / COUNT_IF(is_real) AS hold_rise_log,
+        SUM(CASE WHEN is_real THEN LN(valid_rise + 1) / LN(2) ELSE 0 END) / COUNT_IF(is_real) AS hold_rise_log,
         (SUM(CASE WHEN is_real THEN total_sell_sol ELSE 0 END) - SUM(CASE WHEN is_real THEN total_buy_sol ELSE 0 END)) 
             / NULLIF(SUM(CASE WHEN is_real THEN total_buy_sol ELSE 0 END), 0) AS totalpnl,
         COUNT_IF(is_valid) AS count,
         COUNT_IF(is_real) AS real_count,
         COUNT_IF(is_real AND (buy_count > 3 OR hold_time < 10 OR buy_rise > 1.4)) AS bad_count,
+        COUNT_IF(is_real AND (hold_time < 10)) AS eating_real_all_count,
+        COUNT_IF(hold_time < 10) AS eating_all_count,
+        COUNT_IF(is_real AND first_buy_to_first_sell_seconds IS NOT NULL AND first_buy_to_first_sell_seconds < 10) AS eating_real_count,
         COUNT_IF(is_real AND is_bundle = 1) AS bundle_count,
         COUNT_IF(is_real AND first_rise_duration >= 0) AS rise_rise,
         COUNT_IF(is_real AND first_rise_duration >= 0 AND first_rise_duration <= (SELECT rise_filter_time FROM constants)) AS rise_rise_filter,
@@ -590,12 +597,13 @@ walletInfo AS (
         COUNT_IF(is_real AND (first_buy_project = 'meteoradbc' OR first_buy_project = 'meteora-mig')) AS meteora_valid_count,
         COUNT_IF(is_real AND (first_buy_project = 'pump' OR first_buy_project = 'pump-mig')) AS pump_valid_count,
         COUNT_IF(is_real AND (first_buy_project = 'launchlab' OR first_buy_project = 'launchlab-mig')) AS launchlab_valid_count,
-        COUNT_IF(is_real AND is_creator = 1) AS creator_count,
+        COUNT_IF(is_creator = 1) AS creator_count,
         COUNT_IF(is_real AND buy_rise > 1.3) AS follow_count,
         SUM(CASE WHEN is_real THEN (age_metrics + mc_metrics * 2 + hold_pnl_metrics * 2 + valid_rise_metrics * 2 + hold_time_metrics + pnl_metrics + rise_metrics / 2 + buy_before_ath_metrics * 2 + buy_rise_metrics * 2) / 14.5 ELSE 0 END) AS total_metrics,
         SUM(CASE WHEN is_real AND dev_metrics > 0 THEN dev_metrics ELSE 0 END) - 
             (2 * pow(2, COUNT_IF(is_real AND dev_metrics < 0)) -1) AS devs_metrics,
-        COUNT_IF(is_real AND is_fake = 1) AS fake_count,
+        COUNT_IF(is_valid AND is_fake = 1) AS fake_valid_count,
+        COUNT_IF(is_fake = 1) AS fake_all_count,
         CASE 
             WHEN SUM(CASE WHEN is_real THEN 1.0 / NULLIF(valid_rise,0) ELSE 0 END) > 0
             THEN COUNT_IF(is_real) / SUM(CASE WHEN is_real THEN 1.0 / NULLIF(valid_rise,0) ELSE 0 END)
@@ -607,29 +615,34 @@ walletInfo AS (
 results AS (
     SELECT
         wi.wallet,
-        COALESCE(sw.start_again, ft.first_trade_solana) AS start_again,
-        COALESCE(sw.silence, 0) AS silence_days,
+        -- COALESCE(sw.start_again, ft.first_trade_solana) AS start_again,
+        -- COALESCE(sw.silence, 0) AS silence_days,
         token_count,
+        count,              -- total filtered tokens --
+        real_count,  -- total filtered tokens except fake tokens --
+        fake_valid_count, -- fake valid token count --
+        fake_all_count, -- fake all token count --
+        mig_count, -- migrate count --
+        eating_real_count, -- real token first buy to first sell in 10 seconds --
+        eating_real_all_count, -- real token first buy to sell all in 10 seconds --
+        eating_all_count, -- first buy to sell all in 10 seconds --
+        dump_count,  --dump before first sell all --
+        creator_count, -- total creator token count --
+        CAST(ft.first_trade_solana AS DATE) AS first_trade, -- first trade date on solana --
+        CAST(last_trade AS DATE) AS last_trade, -- last trade date on solana --
         bonding_count,
         meteora_count,
         pump_count,
         launchlab_count,
-        count,
-        fake_count AS scam,
-        follow_count,
-        dump_count,
+        follow_count, -- first buy slot 1.3x --
         count - real_count AS fake_history_count,
-        real_count,
-        good_count,
-        safe_count,
-        bad_count,
+        good_count,  -- first buy to 3x in 600 seconds --
+        safe_count,  -- first buy to 5x in 600 seconds and no dump before first sell all --
+        bad_count,   -- 3 times buy or hold time < 10 seconds or first buy slot 1.4x --
         meteora_valid_count,
         pump_valid_count,
         launchlab_valid_count,
-        mig_count,
-        fake_seller,
-        ft.first_trade_solana AS first_trade,
-        last_trade,
+        fake_seller, -- target sell signal is bad, target hold over 4x but pnl is less than 1.5
         CASE WHEN real_count > 0 THEN mig_time / real_count ELSE 0 END AS avg_mig_time,
         hold_rise_avg,
         CASE WHEN real_count > 0 THEN hold_rise_2x * 100.0 / real_count ELSE 0 END AS hold_rise_2x,
@@ -658,35 +671,40 @@ results AS (
         rise_log,
         hold_rise_log,
         hold_pnl_log,
-        creator_count,
-        CASE WHEN real_count > 0 THEN creator_count * 100.0 / real_count ELSE 0 END AS creator_ratio,
+        CASE WHEN token_count > 0 THEN creator_count * 100.0 / token_count ELSE 0 END AS creator_ratio,
         CASE WHEN real_count > 0 THEN total_metrics / real_count ELSE 0 END AS total_metrics,
         CASE WHEN real_count > 0 THEN devs_metrics / real_count ELSE 0 END AS dev_metrics,
-        CASE WHEN token_count > 0 THEN fake_count * 100.0 / token_count ELSE 0 END AS scam_ratio,
+        CASE WHEN token_count > 0 THEN fake_all_count * 100.0 / token_count ELSE 0 END AS fake_all_ratio,
+        CASE WHEN count > 0 THEN fake_valid_count * 100.0 / count ELSE 0 END AS fake_valid_ratio,
+        CASE WHEN token_count > 0 THEN eating_all_count * 100.0 / token_count ELSE 0 END AS eating_ratio,
         harmonic_mean_calc_pnl
     FROM walletInfo wi
     LEFT JOIN LATERAL (
         SELECT MIN(block_time) AS first_trade_solana
         FROM dex_solana.trades
-        WHERE block_time >= TIMESTAMP '2025-08-08' AND trader_id = wi.wallet
+        WHERE block_time >= (NOW() - INTERVAL '120' day) AND trader_id = wi.wallet
     ) ft ON TRUE
-    LEFT JOIN dune.rnadys410_team_4024.result_silence_wallets sw ON sw.wallet = wi.wallet
+    -- LEFT JOIN dune.schoolelite564_team_2039.result_silence_wallets sw ON sw.wallet = wi.wallet
 )
 SELECT
     r.*,
-    ROW_NUMBER() OVER (ORDER BY r.mig_ratio DESC, r.total_metrics DESC) AS row_num
+    ROW_NUMBER() OVER (ORDER BY r.total_metrics DESC) AS row_num
 FROM results r
 WHERE 
-    r.count >= 2
-    AND r.count <= 20
-    AND r.creator_count <= 1
-    AND r.token_count <= 40
-    AND r.scam <= 1
-    AND r.rise_2x >= 20
-    AND r.rise_3x > 0
-    AND r.rise_cond_met > 0
-    AND r.last_trade - r.first_trade >= INTERVAL '12' HOUR
-    AND (r.pump_count > 0 OR r.launchlab_count > 0)
-    
+    r.real_count >=1
+    AND r.real_count <= 20
+    AND r.creator_count <= 3 -- all token creator count should be smaller than 3--
+    AND r.creator_ratio <= 80 -- all token creator ratio should be smaller than 80%--
+    AND r.token_count <= 30 
+    AND r.eating_all_count <= 5 -- all eating token count should be smaller than 5--
+    AND r.eating_real_all_count <= 3 -- real eating token count should be smaller than 3--
+    AND r.eating_ratio <= 30 -- all eating token ratio should be smaller than 30%--
+    AND r.fake_valid_count < 2 -- fake real token count should be smaller than 2--
+    AND r.fake_valid_ratio <= 20 -- fake real token ratio should be smaller than 10%--
+    AND r.fake_all_ratio <= 30 -- all token fake ratio should be smaller than 30%--
+    AND r.rise_2x >= 50 -- real token rise 2x ratio should be greater than 50%--
+    AND r.rise_3x > 0 -- real token rise 3x ratio should be greater than 0--
+    AND r.rise_cond_met > 0 -- real token rise condition met ratio should be greater than 0--
+    AND r.last_trade - r.first_trade >= INTERVAL '12' HOUR -- last trade date should be greater than 12 hours after first trade date--
     -- AND r.first_trade >= TIMESTAMP '2025-09-20'
 ORDER BY r.total_metrics DESC

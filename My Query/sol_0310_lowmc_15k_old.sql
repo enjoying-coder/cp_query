@@ -1,14 +1,14 @@
 WITH
 constants AS (
     SELECT
-        TIMESTAMP '2025-12-24' AS startDate,
+        TIMESTAMP '2026-03-03' AS startDate,
         0 AS min_buy_mc,
-        20 AS max_buy_mc,
+        15 AS max_buy_mc,
         0 AS min_token_age,
         90000000 AS max_token_age,
-        0 AS min_first_buy,
+        0.1 AS min_first_buy,
         100 AS max_first_buy,
-        0 AS min_total_buy,
+        0.1 AS min_total_buy,
         100 AS max_total_buy,
         3 AS rise_filter,
         600 AS rise_filter_time,
@@ -16,7 +16,7 @@ constants AS (
         true AS include_pump,
         true AS include_launchlab,
         true AS include_meteora,
-        3 AS bonding_selection_mode -- 1: only bonding buy, 2: only after-bonding buy, 3: both
+        1 AS bonding_selection_mode -- 1: only bonding buy, 2: only after-bonding buy, 3: both
 ),
 meteora_bonding_configs AS (
     SELECT
@@ -191,21 +191,21 @@ migrations AS (
         mt.block_slot AS mig_block_slot
     FROM meteora_migrated_tokens mt
 ),
--- creators AS (
---     SELECT 
---         token,
---         block_time,
---         dev
---     FROM dune.ivoshere1123.result_creators
+creators AS (
+    SELECT 
+        token,
+        block_time,
+        dev
+    FROM dune.sutomo_team_e25242c9.result_creators
 
---     UNION ALL
+    UNION ALL
 
---     SELECT
---         mt.token,
---         mt.block_time,
---         mt.dev
---     FROM meteora_bonding_tokens mt
--- ),
+    SELECT
+        mt.token,
+        mt.block_time,
+        mt.dev
+    FROM meteora_bonding_tokens mt
+),
 first_buy_mc AS (
     SELECT
         wallet,
@@ -356,21 +356,21 @@ initialTradeTokens_temp AS (
         CASE WHEN fb.buy_block_slot >= COALESCE(m.mig_block_slot, 0) - 2 AND COALESCE(m.mig_block_slot, 0) > 0 THEN 1 ELSE 0 END AS is_bundle,
         fb.buy_block_slot,
         COALESCE(m.mig_block_slot, 0) AS mig_block_slot,
-        -- date_diff(
-        --     'second',
-        --     COALESCE(c.block_time, TIMESTAMP '2025-08-15'),
-        --     fb.buy_block_time
-        -- ) AS token_age,
+        date_diff(
+            'second',
+            COALESCE(c.block_time, TIMESTAMP '2025-08-15'),
+            fb.buy_block_time
+        ) AS token_age,
         date_diff('second', fb.buy_block_time, m.mig_block_time) AS mig_time,
-        -- CASE WHEN ta.wallet = c.dev THEN 1 ELSE 0 END AS is_creator,
-        -- CASE WHEN fake.token IS NOT NULL THEN 1 ELSE 0 END AS is_fake,
+        CASE WHEN ta.wallet = c.dev THEN 1 ELSE 0 END AS is_creator,
+        CASE WHEN fake.token IS NOT NULL THEN 1 ELSE 0 END AS is_fake,
         ROW_NUMBER() OVER (PARTITION BY ta.wallet, ta.token ORDER BY ta.firstTradeTime) AS rn
     FROM trade_aggregates ta
     LEFT JOIN first_buy_mc fb ON ta.wallet = fb.wallet AND ta.token = fb.token
     LEFT JOIN tokens_ath tath ON ta.token = tath.token
     LEFT JOIN migrations m ON ta.token = m.token
-    -- LEFT JOIN creators c ON ta.token = c.token
-    -- LEFT JOIN dune.ivoshere1123.result_fake_tokens fake ON ta.token = fake.token
+    LEFT JOIN creators c ON ta.token = c.token
+    LEFT JOIN dune.sutomo_team_e25242c9.result_fake_tokens fake ON ta.token = fake.token
     LEFT JOIN trades_by_slot tbs ON ta.token = tbs.token AND ta.firstTradeSlot = tbs.block_slot
 ),
 initialTradeTokens AS (
@@ -427,7 +427,7 @@ filteredTokens AS (
         it.*,
         (
             first_buy_mc >= c.min_buy_mc AND first_buy_mc <= c.max_buy_mc AND
-            -- token_age >= c.min_token_age AND token_age <= c.max_token_age AND
+            token_age >= c.min_token_age AND token_age <= c.max_token_age AND
             (
                 (c.bonding_selection_mode = 1 AND first_buy_project IN ('pump', 'launchlab', 'meteoradbc')) OR 
                 (c.bonding_selection_mode = 2 AND first_buy_project NOT IN ('pump', 'launchlab', 'meteoradbc')) OR
@@ -443,7 +443,7 @@ filteredTokens AS (
         ) AS is_valid,
         (
             first_buy_mc >= c.min_buy_mc AND first_buy_mc <= c.max_buy_mc AND
-            -- token_age >= c.min_token_age AND token_age <= c.max_token_age AND
+            token_age >= c.min_token_age AND token_age <= c.max_token_age AND
             (
                 (c.bonding_selection_mode = 1 AND first_buy_project IN ('pump', 'launchlab', 'meteoradbc')) OR 
                 (c.bonding_selection_mode = 2 AND first_buy_project NOT IN ('pump', 'launchlab', 'meteoradbc')) OR
@@ -457,15 +457,15 @@ filteredTokens AS (
             first_buy_sol >= c.min_first_buy AND first_buy_sol <= c.max_first_buy AND
             total_buy_sol >= c.min_total_buy AND total_buy_sol <= c.max_total_buy
         ) AS is_real,
-        -- (
-        --     CASE 
-        --         WHEN token_age < 600 THEN 100
-        --         WHEN token_age < 900 THEN 90
-        --         WHEN token_age < 1200 THEN 80
-        --         WHEN token_age < 3600 THEN 70
-        --         ELSE 60
-        --     END
-        -- ) AS age_metrics,
+        (
+            CASE 
+                WHEN token_age < 600 THEN 100
+                WHEN token_age < 900 THEN 90
+                WHEN token_age < 1200 THEN 80
+                WHEN token_age < 3600 THEN 70
+                ELSE 60
+            END
+        ) AS age_metrics,
         (
             CASE
                 WHEN first_buy_mc < 15 THEN 100
@@ -590,13 +590,12 @@ walletInfo AS (
         COUNT_IF(is_real AND (first_buy_project = 'meteoradbc' OR first_buy_project = 'meteora-mig')) AS meteora_valid_count,
         COUNT_IF(is_real AND (first_buy_project = 'pump' OR first_buy_project = 'pump-mig')) AS pump_valid_count,
         COUNT_IF(is_real AND (first_buy_project = 'launchlab' OR first_buy_project = 'launchlab-mig')) AS launchlab_valid_count,
-        -- COUNT_IF(is_real AND is_creator = 1) AS creator_count,
+        COUNT_IF(is_real AND is_creator = 1) AS creator_count,
         COUNT_IF(is_real AND buy_rise > 1.3) AS follow_count,
-        -- SUM(CASE WHEN is_real THEN (age_metrics + mc_metrics * 2 + hold_pnl_metrics * 2 + valid_rise_metrics * 2 + hold_time_metrics + pnl_metrics + rise_metrics / 2 + buy_before_ath_metrics * 2 + buy_rise_metrics * 2) / 14.5 ELSE 0 END) AS total_metrics,
-        SUM(CASE WHEN is_real THEN (mc_metrics * 2 + hold_pnl_metrics * 2 + valid_rise_metrics * 2 + hold_time_metrics + pnl_metrics + rise_metrics / 2 + buy_before_ath_metrics * 2 + buy_rise_metrics * 2) / 14.5 ELSE 0 END) AS total_metrics,
+        SUM(CASE WHEN is_real THEN (age_metrics + mc_metrics * 2 + hold_pnl_metrics * 2 + valid_rise_metrics * 2 + hold_time_metrics + pnl_metrics + rise_metrics / 2 + buy_before_ath_metrics * 2 + buy_rise_metrics * 2) / 14.5 ELSE 0 END) AS total_metrics,
         SUM(CASE WHEN is_real AND dev_metrics > 0 THEN dev_metrics ELSE 0 END) - 
             (2 * pow(2, COUNT_IF(is_real AND dev_metrics < 0)) -1) AS devs_metrics,
-        -- COUNT_IF(is_real AND is_fake = 1) AS fake_count,
+        COUNT_IF(is_real AND is_fake = 1) AS fake_count,
         CASE 
             WHEN SUM(CASE WHEN is_real THEN 1.0 / NULLIF(valid_rise,0) ELSE 0 END) > 0
             THEN COUNT_IF(is_real) / SUM(CASE WHEN is_real THEN 1.0 / NULLIF(valid_rise,0) ELSE 0 END)
@@ -616,7 +615,7 @@ results AS (
         pump_count,
         launchlab_count,
         count,
-        -- fake_count AS scam,
+        fake_count AS scam,
         follow_count,
         dump_count,
         count - real_count AS fake_history_count,
@@ -659,11 +658,11 @@ results AS (
         rise_log,
         hold_rise_log,
         hold_pnl_log,
-        -- creator_count,
-        -- CASE WHEN real_count > 0 THEN creator_count * 100.0 / real_count ELSE 0 END AS creator_ratio,
+        creator_count,
+        CASE WHEN real_count > 0 THEN creator_count * 100.0 / real_count ELSE 0 END AS creator_ratio,
         CASE WHEN real_count > 0 THEN total_metrics / real_count ELSE 0 END AS total_metrics,
         CASE WHEN real_count > 0 THEN devs_metrics / real_count ELSE 0 END AS dev_metrics,
-        -- CASE WHEN token_count > 0 THEN fake_count * 100.0 / token_count ELSE 0 END AS scam_ratio,
+        CASE WHEN token_count > 0 THEN fake_count * 100.0 / token_count ELSE 0 END AS scam_ratio,
         harmonic_mean_calc_pnl
     FROM walletInfo wi
     LEFT JOIN LATERAL (
@@ -678,15 +677,14 @@ SELECT
     ROW_NUMBER() OVER (ORDER BY r.total_metrics DESC) AS row_num
 FROM results r
 WHERE 
-    r.count >= 2
-    AND r.count <= 30
-    AND r.token_count <= 40
-    -- AND r.scam  <= 1
+    r.count >= 2 AND r.count <= 20
+    AND r.token_count <= 30
+    AND r.scam  <= 1
     AND r.last_trade >= r.first_trade + INTERVAL '12' HOUR
-    -- AND r.creator_count <= 1
-    AND r.rise_2x >= 30
+    AND r.creator_count <= 1
+    AND r.rise_2x >= 25
     AND r.rise_3x > 0
     AND r.rise_cond_met > 0
-    ANd r.win_rate >= 30
+    ANd r.win_rate >= 25
     -- AND r.first_trade >= TIMESTAMP '2025-09-20'
 ORDER BY r.total_metrics DESC

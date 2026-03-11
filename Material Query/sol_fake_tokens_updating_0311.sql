@@ -239,7 +239,7 @@ creators AS (
         token,
         block_time,
         dev
-    FROM dune.rnadys410_team_4024.result_creators
+    FROM dune.sutomo13_team_e2b87304.result_creators
 
     UNION ALL
 
@@ -285,7 +285,18 @@ WHERE
     -- (project = 'pump' OR project = 'launchlab' OR project = 'meteoradbc') AND (close_mc - open_mc > 30 OR open_mc - close_mc > 25 OR (open_mc >= 25 AND close_mc_grouped <= 10) OR open_mc >= 18 AND close_mc <= 9)
     -- OR (project = 'pump-mig' OR project = 'launchlab-mig' OR project = 'meteora-mig') AND ((open_mc >= 50 AND open_mc >= close_mc_grouped * 2) OR (open_mc <= 50 AND open_mc - close_mc_grouped >= 30))
     -- OR dsc.dev_sell_count >= 10
-    (project = 'pump' OR project = 'launchlab' OR project = 'meteoradbc') AND (close_mc <= open_mc * 0.4 OR close_mc_grouped <= open_mc * 0.4 OR close_mc - open_mc > 15 OR open_mc - close_mc > 15 OR (open_mc >= 12 AND close_mc_grouped <= 4) OR (open_mc >= 12 AND close_mc <= 4))
-    OR (project = 'pump-mig' OR project = 'launchlab-mig' OR project = 'meteora-mig') AND ((open_mc >= 35 AND close_mc_grouped <= open_mc * 0.4) OR (open_mc <= 35 AND open_mc - close_mc_grouped >= 20))
-    OR dsc.dev_sell_count >= 50
+    (project = 'pump' OR project = 'launchlab' OR project = 'meteoradbc') AND (
+        close_mc <= open_mc * 0.4
+        OR close_mc_grouped <= open_mc * 0.4
+        OR close_mc - open_mc > 15
+        OR (open_mc - close_mc > CASE WHEN open_mc > 25 THEN 15 ELSE 10 END)
+        OR (open_mc - close_mc_grouped > CASE WHEN open_mc > 25 THEN 15 ELSE 10 END)
+        OR (open_mc >= 12 AND close_mc_grouped <= 4)
+        OR (open_mc >= 12 AND close_mc <= 4)
+    )
+    OR (project = 'pump-mig' OR project = 'launchlab-mig' OR project = 'meteora-mig') AND (
+        (open_mc >= 35 AND close_mc_grouped <= open_mc * 0.5)
+        OR (open_mc < 35 AND open_mc - close_mc_grouped >= 17)
+    )
+    OR dsc.dev_sell_count >= 30
 GROUP BY trades_by_slot_grouped.token

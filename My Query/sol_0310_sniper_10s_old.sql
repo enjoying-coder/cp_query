@@ -1,17 +1,17 @@
 WITH
 constants AS (
     SELECT
-        TIMESTAMP '2025-11-14' AS startDate,
+        TIMESTAMP '2026-03-04' AS startDate,
         0 AS min_buy_mc,
-        50 AS max_buy_mc,
+        30 AS max_buy_mc,
         0 AS min_token_age,
         10 AS max_token_age,
-        0 AS min_first_buy,
+        0.05 AS min_first_buy,
         100 AS max_first_buy,
-        0 AS min_total_buy,
+        0.05 AS min_total_buy,
         100 AS max_total_buy,
-        3 AS rise_filter,
-        600 AS rise_filter_time,
+        2.5 AS rise_filter,
+        300 AS rise_filter_time,
         20 AS dump_percent,
         true AS include_pump,
         true AS include_launchlab,
@@ -26,7 +26,7 @@ meteora_bonding_configs AS (
         post_migration_token_supply / power(10, token_decimal) AS post_supply,
         quote_mint
     FROM meteora_solana.dynamic_bonding_curve_evt_evtcreateconfig
-    WHERE evt_block_time >= TIMESTAMP '2025-09-20'
+    WHERE evt_block_time >= TIMESTAMP '2025-11-15'
       AND quote_mint IN ('So11111111111111111111111111111111111111112', 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v')
 ),
 meteora_bonding_tokens AS (
@@ -41,7 +41,7 @@ meteora_bonding_tokens AS (
         evt_tx_signer AS dev
     FROM meteora_solana.dynamic_bonding_curve_evt_evtinitializepool
     INNER JOIN meteora_bonding_configs c ON c.config = meteora_solana.dynamic_bonding_curve_evt_evtinitializepool.config
-    WHERE evt_block_time >= TIMESTAMP '2025-09-20'
+    WHERE evt_block_time >= TIMESTAMP '2025-11-15'
 ),
 meteora_migrated_tokens AS (
     SELECT 
@@ -54,7 +54,7 @@ meteora_migrated_tokens AS (
         call_block_time AS block_time
     FROM meteora_solana.dynamic_bonding_curve_call_migration_damm_v2 
     INNER JOIN meteora_bonding_tokens t ON t.token = meteora_solana.dynamic_bonding_curve_call_migration_damm_v2.account_base_mint
-    WHERE call_block_time >= TIMESTAMP '2025-09-20'
+    WHERE call_block_time >= TIMESTAMP '2025-11-15'
 ),
 trades AS (
     SELECT
@@ -172,7 +172,7 @@ migrations AS (
         evt_block_time AS mig_block_time,
         evt_block_slot AS mig_block_slot
     FROM pumpdotfun_solana.pump_evt_completeevent
-    WHERE evt_block_time >= TIMESTAMP '2025-09-20'
+    WHERE evt_block_time >= TIMESTAMP '2025-11-15'
         
     UNION ALL
 
@@ -181,7 +181,7 @@ migrations AS (
         call_block_time AS mig_block_time,
         call_block_slot AS mig_block_slot
     FROM raydium_solana.raydium_launchpad_call_migrate_to_cpswap
-    WHERE call_block_time >= TIMESTAMP '2025-09-20'
+    WHERE call_block_time >= TIMESTAMP '2025-11-15'
 
     UNION ALL
 
@@ -196,7 +196,7 @@ creators AS (
         token,
         block_time,
         dev
-    FROM dune.schoolelite564.result_creators
+    FROM dune.sutomo_team_e25242c9.result_creators
 
     UNION ALL
 
@@ -370,7 +370,7 @@ initialTradeTokens_temp AS (
     LEFT JOIN tokens_ath tath ON ta.token = tath.token
     LEFT JOIN migrations m ON ta.token = m.token
     LEFT JOIN creators c ON ta.token = c.token
-    LEFT JOIN dune.schoolelite564.result_fake_tokens fake ON ta.token = fake.token
+    LEFT JOIN dune.sutomo_team_e25242c9.result_fake_tokens fake ON ta.token = fake.token
     LEFT JOIN trades_by_slot tbs ON ta.token = tbs.token AND ta.firstTradeSlot = tbs.block_slot
 ),
 initialTradeTokens AS (
@@ -607,8 +607,8 @@ walletInfo AS (
 results AS (
     SELECT
         wi.wallet,
-        COALESCE(sw.start_again, ft.first_trade_solana) AS start_again,
-        COALESCE(sw.silence, 0) AS silence_days,
+        -- COALESCE(sw.start_again, ft.first_trade_solana) AS start_again,
+        -- COALESCE(sw.silence, 0) AS silence_days,
         token_count,
         bonding_count,
         meteora_count,
@@ -670,23 +670,24 @@ results AS (
         FROM dex_solana.trades
         WHERE block_time >= TIMESTAMP '2025-08-08' AND trader_id = wi.wallet
     ) ft ON TRUE
-    LEFT JOIN dune.rnadys410_team_4024.result_silence_wallets sw ON sw.wallet = wi.wallet
+    -- LEFT JOIN dune.schoolelite564_team_2039.result_silence_wallets sw ON sw.wallet = wi.wallet
 )
 SELECT
     r.*,
     ROW_NUMBER() OVER (ORDER BY r.total_metrics DESC) AS row_num
 FROM results r
 WHERE 
-    r.count >= 1
-    AND r.count <= 3
-    AND r.creator_count < 1
-    AND r.token_count <= 10
-    AND r.scam <= 1
-    AND r.rise_2x >= 20
-    AND r.rise_3x > 0
+    r.real_count >= 2
+    AND r.real_count <= 20
+    AND r.token_count <= 30
+    AND r.token_count >= 2
+    AND r.creator_count <= 1
+    AND r.scam < 1
+    AND r.rise_2x >= 25
+    AND r.rise_3x > 10
     AND r.rise_cond_met > 0
-    AND r.last_trade - r.first_trade >= INTERVAL '7' DAY
-    AND (r.pump_count > 0 OR r.launchlab_count > 0)
-    
+    AND r.last_trade - r.first_trade >= INTERVAL '12' HOUR
+    AND NOT (r.dump_count / r.count = 1 AND NOW() - r.first_trade >= INTERVAL '20' day)
+    -- AND (r.pump_count > 0 OR r.launchlab_count > 0)
     -- AND r.first_trade >= TIMESTAMP '2025-09-20'
 ORDER BY r.total_metrics DESC

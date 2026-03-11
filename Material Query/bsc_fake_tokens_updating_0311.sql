@@ -9,9 +9,18 @@ migrations AS (
     SELECT 
         token,
         evt_block_time AS mig_block_time,
-        evt_block_number AS mig_block_number
+        evt_block_number AS mig_block_slot
     FROM 
         four_meme_multichain.tokenmanager2_evt_tradestop WHERE chain = 'bnb'
+
+    UNION ALL
+
+    SELECT 
+        token,
+        evt_block_time AS mig_block_time,
+        evt_block_number AS mig_block_slot
+    FROM 
+        flap_bnb.portal_evt_launchedtodex
 ),
 creators AS (
     SELECT 
@@ -23,6 +32,16 @@ creators AS (
         four_meme_multichain.tokenmanager2_evt_tokencreate tc
     LEFT JOIN four_meme_multichain.tokenmanager2_evt_liquidityadded la ON tc.token = la.base
     WHERE tc.chain = 'bnb'
+
+    UNION ALL
+
+    SELECT
+        token,
+        0x0000000000000000000000000000000000000000 AS quote,
+        evt_block_time AS block_time,
+        creator AS dev
+    FROM 
+        flap_bnb.portal_evt_tokencreated
 ),
 trades AS (
     SELECT 
@@ -76,6 +95,41 @@ trades AS (
     FROM four_meme_multichain.tokenmanager2_evt_tokensale fmt
     LEFT JOIN creators c ON c.token = fmt.token
     WHERE fmt.evt_block_time >= (SELECT startDate FROM constants) AND chain = 'bnb'
+
+    UNION ALL
+
+    SELECT 
+        fmt.token,
+        fmt.evt_tx_from AS wallet,
+        'buy' AS swap_type,
+        eth / 1e18 AS bnb_amount,
+        fmt.amount / 1e18 AS token_amount,
+        fmt.postPrice * (SELECT bnb_price FROM constants) / 1e12 AS mc,
+        fmt.evt_block_time AS block_time,
+        fmt.evt_block_number AS block_slot,
+        COALESCE(fmt.evt_index, 0) AS tx_index,
+        'flap' AS project
+    FROM flap_bnb.portal_evt_tokenbought fmt
+    LEFT JOIN creators c ON c.token = fmt.token
+    WHERE fmt.evt_block_time >= (SELECT startDate FROM constants)
+
+    UNION ALL
+
+    SELECT 
+        fmt.token,
+        fmt.evt_tx_from AS wallet,
+        'sell' AS swap_type,
+        eth / 1e18 AS bnb_amount,
+        fmt.amount / 1e18 AS token_amount,
+        fmt.postPrice * (SELECT bnb_price FROM constants) / 1e12 AS mc,
+        fmt.evt_block_time AS block_time,
+        fmt.evt_block_number AS block_slot,
+        COALESCE(fmt.evt_index, 0) AS tx_index,
+        'flap' AS project
+    FROM flap_bnb.portal_evt_tokensold fmt
+    LEFT JOIN creators c ON c.token = fmt.token
+    WHERE fmt.evt_block_time >= (SELECT startDate FROM constants)
+
 
     UNION ALL
 
@@ -156,6 +210,17 @@ SELECT token
 FROM 
     trades_by_slot_grouped 
 WHERE 
-    (project = 'fourmeme') AND (close_mc - open_mc > 25 OR open_mc - close_mc > 25 OR (open_mc >= 20 AND close_mc_grouped <= 8))
-    OR (project = 'pancake') AND ((open_mc >= 50 AND open_mc >= close_mc_grouped * 3) OR (open_mc <= 50 AND open_mc - close_mc_grouped >= 30))
+    (project = 'fourmeme') AND (
+        close_mc <= open_mc * 0.3
+        OR close_mc - open_mc > 25
+        OR open_mc - close_mc > 25
+        OR (open_mc >= 20 AND close_mc_grouped <= 8))
+    OR (project = 'flap') AND (
+        close_mc <= open_mc * 0.3
+        OR close_mc - open_mc > 20
+        OR open_mc - close_mc > 20
+        OR (open_mc >= 20 AND close_mc_grouped <= 8))
+    OR (project = 'pancake') AND (
+        (open_mc >= 50 AND open_mc >= close_mc_grouped * 3)
+        OR (open_mc <= 50 AND open_mc - close_mc_grouped >= 30))
 GROUP BY token

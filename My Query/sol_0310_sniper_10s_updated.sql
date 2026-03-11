@@ -441,6 +441,7 @@ filteredTokens AS (
             ) AND
             first_buy_sol >= c.min_first_buy AND first_buy_sol <= c.max_first_buy AND
             total_buy_sol >= c.min_total_buy AND total_buy_sol <= c.max_total_buy
+            AND COALESCE(it.is_creator, 0) = 0
         ) AS is_valid,
         (
             first_buy_mc >= c.min_buy_mc AND first_buy_mc <= c.max_buy_mc AND
@@ -462,6 +463,7 @@ filteredTokens AS (
         ) AS is_real,
         (
             CASE 
+                WHEN token_age < 5 THEN 140
                 WHEN token_age < 10 THEN 120
                 WHEN token_age < 60 THEN 100
                 WHEN token_age < 300 THEN 90
@@ -472,6 +474,7 @@ filteredTokens AS (
         ) AS age_metrics,
         (
             CASE
+                WHEN first_buy_mc < 5 THEN 120
                 WHEN first_buy_mc < 10 THEN 100
                 WHEN first_buy_mc < 20 THEN 85
                 ELSE 70
@@ -618,8 +621,8 @@ results AS (
         -- COALESCE(sw.start_again, ft.first_trade_solana) AS start_again,
         -- COALESCE(sw.silence, 0) AS silence_days,
         token_count,
-        count,              -- total filtered tokens --
-        real_count,  -- total filtered tokens except fake tokens --
+        count,              -- total filtered tokens except dev tokens--
+        real_count,  -- total filtered tokens except fake tokens and dev tokens--
         fake_valid_count, -- fake valid token count --
         fake_all_count, -- fake all token count --
         mig_count, -- migrate count --
@@ -676,7 +679,7 @@ results AS (
         CASE WHEN real_count > 0 THEN devs_metrics / real_count ELSE 0 END AS dev_metrics,
         CASE WHEN token_count > 0 THEN fake_all_count * 100.0 / token_count ELSE 0 END AS fake_all_ratio,
         CASE WHEN count > 0 THEN fake_valid_count * 100.0 / count ELSE 0 END AS fake_valid_ratio,
-        CASE WHEN token_count > 0 THEN eating_all_count * 100.0 / token_count ELSE 0 END AS eating_ratio,
+        CASE WHEN token_count > 0 THEN eating_all_count * 100.0 / token_count ELSE 0 END AS eating_all_ratio,
         harmonic_mean_calc_pnl
     FROM walletInfo wi
     LEFT JOIN LATERAL (
@@ -694,13 +697,14 @@ WHERE
     r.real_count >=1
     AND r.real_count <= 20
     AND r.creator_count <= 3 -- all token creator count should be smaller than 3--
-    AND r.creator_ratio <= 80 -- all token creator ratio should be smaller than 80%--
-    AND r.token_count <= 30 
+    AND r.creator_ratio <= 25 -- all token creator ratio should be smaller than 25%--
+    AND r.token_count <= 30
     AND r.eating_all_count <= 5 -- all eating token count should be smaller than 5--
     AND r.eating_real_all_count <= 3 -- real eating token count should be smaller than 3--
-    AND r.eating_ratio <= 30 -- all eating token ratio should be smaller than 30%--
-    AND r.fake_valid_count < 2 -- fake real token count should be smaller than 2--
-    AND r.fake_valid_ratio <= 20 -- fake real token ratio should be smaller than 10%--
+    AND r.eating_all_ratio <= 30 -- all eating token ratio should be smaller than 30%--
+    AND r.fake_valid_count <= 2 -- fake real token count should be smaller than 2--
+    AND r.fake_valid_ratio <= 30 -- fake real token ratio should be smaller than 30%--
+    AND r.fake_all_count <= 4 -- all token fake count should be smaller than 5--
     AND r.fake_all_ratio <= 30 -- all token fake ratio should be smaller than 30%--
     AND r.rise_2x >= 50 -- real token rise 2x ratio should be greater than 50%--
     AND r.rise_3x > 0 -- real token rise 3x ratio should be greater than 0--

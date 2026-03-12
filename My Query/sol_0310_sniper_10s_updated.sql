@@ -492,9 +492,9 @@ filteredTokens AS (
         ) AS hold_pnl_metrics,
         (
             CASE 
-                -- WHEN valid_rise > 6 THEN 140
+                WHEN valid_rise > 6 THEN 140
                 WHEN valid_rise > 4 THEN 120
-                WHEN valid_rise > 2 THEN 100
+                WHEN valid_rise > 3 THEN 100
                 WHEN valid_rise > 2 THEN 80
                 ELSE 40
             END
@@ -504,7 +504,8 @@ filteredTokens AS (
                 WHEN hold_time < 30 THEN 60
                 WHEN hold_time < 60 THEN 80
                 WHEN hold_time < 300 THEN 90
-                WHEN hold_time < 1800 THEN 100
+                WHEN hold_time < 600 THEN 110
+                WHEN hold_time < 1800 THEN 90
                 WHEN hold_time < 3600 THEN 80
                 ELSE 70
             END
@@ -601,12 +602,12 @@ walletInfo AS (
         COUNT_IF(is_real AND (first_buy_project = 'pump' OR first_buy_project = 'pump-mig')) AS pump_valid_count,
         COUNT_IF(is_real AND (first_buy_project = 'launchlab' OR first_buy_project = 'launchlab-mig')) AS launchlab_valid_count,
         COUNT_IF(is_creator = 1) AS creator_count,
+        COUNT_IF(is_valid AND is_fake = 1) AS fake_valid_count,
+        COUNT_IF(is_fake = 1) AS fake_all_count,
         COUNT_IF(is_real AND buy_rise > 1.3) AS follow_count,
         SUM(CASE WHEN is_real THEN (age_metrics + mc_metrics * 2 + hold_pnl_metrics * 2 + valid_rise_metrics * 2 + hold_time_metrics + pnl_metrics + rise_metrics / 2 + buy_before_ath_metrics * 2 + buy_rise_metrics * 2) / 14.5 ELSE 0 END) AS total_metrics,
         SUM(CASE WHEN is_real AND dev_metrics > 0 THEN dev_metrics ELSE 0 END) - 
             (2 * pow(2, COUNT_IF(is_real AND dev_metrics < 0)) -1) AS devs_metrics,
-        COUNT_IF(is_valid AND is_fake = 1) AS fake_valid_count,
-        COUNT_IF(is_fake = 1) AS fake_all_count,
         CASE 
             WHEN SUM(CASE WHEN is_real THEN 1.0 / NULLIF(valid_rise,0) ELSE 0 END) > 0
             THEN COUNT_IF(is_real) / SUM(CASE WHEN is_real THEN 1.0 / NULLIF(valid_rise,0) ELSE 0 END)
@@ -696,9 +697,9 @@ FROM results r
 WHERE 
     r.real_count >=1
     AND r.real_count <= 20
+    AND r.token_count <= 30
     AND r.creator_count <= 3 -- all token creator count should be smaller than 3--
     AND r.creator_ratio <= 25 -- all token creator ratio should be smaller than 25%--
-    AND r.token_count <= 30
     AND r.eating_all_count <= 5 -- all eating token count should be smaller than 5--
     AND r.eating_real_all_count <= 3 -- real eating token count should be smaller than 3--
     AND r.eating_all_ratio <= 30 -- all eating token ratio should be smaller than 30%--

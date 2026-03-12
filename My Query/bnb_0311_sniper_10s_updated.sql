@@ -6,13 +6,13 @@ constants AS (
         20 AS max_buy_mc,
         0 AS min_token_age,
         10 AS max_token_age,
-        0.01 AS min_first_buy,
+        0 AS min_first_buy,
         100 AS max_first_buy,
-        0.01 AS min_total_buy,
+        0 AS min_total_buy,
         100 AS max_total_buy,
-        4 AS rise_filter,
-        500 AS rise_filter_time,
-        25 AS dump_percent,
+        2.5 AS rise_filter,
+        150 AS rise_filter_time,
+        40 AS dump_percent,
         1 AS bonding_selection_mode, -- 1: only bonding buy, 2: only after-bonding buy, 3: both
         0.69 AS aster_price,
         640 AS bnb_price,
@@ -319,7 +319,7 @@ trade_aggregates AS (
             ROW_NUMBER() OVER (PARTITION BY wallet, token ORDER BY block_slot ASC) AS rn,
             -- Find the first point where cumulative buy token = cumulative sell token
             CASE 
-                WHEN cum_sell_token >= cum_buy_token * 0.95 AND cum_buy_token > 0 AND cum_sell_token < cum_buy_token * 1.05THEN
+                WHEN cum_sell_token >= cum_buy_token * 0.95 AND cum_buy_token > 0 AND cum_sell_token < cum_buy_token * 1.05 THEN
                     ROW_NUMBER() OVER (
                         PARTITION BY wallet, token
                         ORDER BY block_slot ASC
@@ -404,6 +404,7 @@ initialTradeTokens_temp AS (
         ta.valid_buy_sol,
         ta.valid_sell_sol,
         (ta.min_sell_time - ta.min_buy_time) AS deltaTimeForBS,
+        DATE_DIFF('second', ta.min_buy_time, ta.min_sell_time) AS first_buy_to_first_sell_seconds,
         CASE WHEN ta.total_buy_sol > 0 THEN ta.total_sell_sol / ta.total_buy_sol ELSE 0 END AS pnl,
         CASE WHEN ta.valid_buy_sol > 0 THEN ta.valid_sell_sol / ta.valid_buy_sol ELSE 0 END AS hold_pnl,
         ta.hold_time,
@@ -416,12 +417,12 @@ initialTradeTokens_temp AS (
         CASE WHEN fb.buy_block_slot < COALESCE(tath.ath_block_slot, 0) THEN 1 ELSE 0 END AS is_buy_before_ath,
         CASE WHEN ta.min_sell_time > m.mig_block_time THEN 1 ELSE 0 END AS is_sell_after_mig,
         CASE WHEN fb.buy_block_slot < COALESCE(m.mig_block_slot, 0) THEN 1 ELSE 0 END AS is_mig,
-        CASE WHEN fb.buy_block_slot >= COALESCE(m.mig_block_slot, 0) - 2 AND COALESCE(m.mig_block_slot, 0) > 0 THEN 1 ELSE 0 END AS is_bundle,
+        CASE WHEN fb.buy_block_slot >= COALESCE(m.mig_block_slot, 0) - 2 AND fb.buy_block_slot <= COALESCE(m.mig_block_slot, 0) AND COALESCE(m.mig_block_slot, 0) > 0 THEN 1 ELSE 0 END AS is_bundle,
         fb.buy_block_slot,
         COALESCE(m.mig_block_slot, 0) AS mig_block_slot,
         date_diff(
             'second',
-            COALESCE(c.block_time, TIMESTAMP '2025-08-15'),
+            COALESCE(c.block_time, (NOW() - INTERVAL '40' day)),
             fb.buy_block_time
         ) AS token_age,
         date_diff('second', fb.buy_block_time, m.mig_block_time) AS mig_time,
@@ -430,7 +431,7 @@ initialTradeTokens_temp AS (
         ROW_NUMBER() OVER (PARTITION BY ta.wallet, ta.token ORDER BY ta.firstTradeTime) AS rn
     FROM trade_aggregates ta
     LEFT JOIN first_buy_mc fb ON ta.wallet = fb.wallet AND ta.token = fb.token
-    LEFT JOIN dune.sutomo_team_e25242c9.result_bsc_fake_tokens fake ON ta.token = fake.token
+    LEFT JOIN dune.sutomo13_team_e2b87304.result_bsc_fake_tokens fake ON ta.token = fake.token
     LEFT JOIN tokens_ath tath ON ta.token = tath.token
     LEFT JOIN migrations m ON ta.token = m.token
     LEFT JOIN creators c ON ta.token = c.token
@@ -502,7 +503,44 @@ filteredTokens AS (
             (c.include_flap AND first_buy_project = 'flap') OR
             (c.include_binance_exclusive AND first_buy_project = 'fourmeme' AND varbinary_substring(it.token, 1, 2) = 0x4444) OR
             (first_buy_project = 'fourmeme-mig' OR first_buy_project = 'flap-mig'))
+            AND COALESCE(it.is_creator, 0) = 0
         ) AS is_valid,
+        (
+            first_buy_mc >= c.min_buy_mc AND first_buy_mc <= c.max_buy_mc AND
+            token_age >= c.min_token_age AND token_age <= c.max_token_age AND
+            (
+                (c.bonding_selection_mode = 1 AND (first_buy_project = 'fourmeme' OR first_buy_project = 'flap')) OR
+                (c.bonding_selection_mode = 2 AND first_buy_project != 'fourmeme' AND first_buy_project != 'flap') OR
+                c.bonding_selection_mode = 3
+            ) AND
+            first_buy_sol >= c.min_first_buy AND first_buy_sol <= c.max_first_buy AND
+            total_buy_sol >= c.min_total_buy AND total_buy_sol <= c.max_total_buy AND
+            ((c.include_fourmeme AND first_buy_project = 'fourmeme' AND varbinary_substring(it.token, 1, 2) != 0x4444) OR
+            (c.include_flap AND first_buy_project = 'flap') OR
+            (c.include_binance_exclusive AND first_buy_project = 'fourmeme' AND varbinary_substring(it.token, 1, 2) = 0x4444) OR
+            (first_buy_project = 'fourmeme-mig' OR first_buy_project = 'flap-mig'))
+            AND COALESCE(it.is_fake, 0) = 0
+            AND COALESCE(it.is_creator, 0) = 0
+        ) AS is_real,
+        (
+            CASE 
+                WHEN token_age < 5 THEN 140
+                WHEN token_age < 10 THEN 120
+                WHEN token_age < 60 THEN 100
+                WHEN token_age < 300 THEN 90
+                WHEN token_age < 600 THEN 80
+                WHEN token_age < 3600 THEN 70
+                ELSE 60
+            END
+        ) AS age_metrics,
+        (
+            CASE
+                WHEN first_buy_mc < 5 THEN 120
+                WHEN first_buy_mc < 10 THEN 100
+                WHEN first_buy_mc < 15 THEN 85
+                ELSE 70
+            END
+        ) AS mc_metrics,
         (
             CASE
                 -- WHEN hold_pnl > 5 THEN 130
@@ -515,9 +553,9 @@ filteredTokens AS (
         ) AS hold_pnl_metrics,
         (
             CASE 
-                -- WHEN valid_rise > 6 THEN 140
+                WHEN valid_rise > 6 THEN 140
                 WHEN valid_rise > 4 THEN 120
-                WHEN valid_rise > 2 THEN 100
+                WHEN valid_rise > 3 THEN 100
                 WHEN valid_rise > 2 THEN 80
                 ELSE 40
             END
@@ -527,9 +565,10 @@ filteredTokens AS (
                 WHEN hold_time < 30 THEN 60
                 WHEN hold_time < 60 THEN 80
                 WHEN hold_time < 300 THEN 90
-                WHEN hold_time < 1800 THEN 100
-                WHEN hold_time < 3600 THEN 100
-                ELSE 90
+                WHEN hold_time < 600 THEN 110
+                WHEN hold_time < 1800 THEN 90
+                WHEN hold_time < 3600 THEN 80
+                ELSE 70
             END
         ) AS hold_time_metrics,
         (
@@ -575,55 +614,60 @@ walletInfo AS (
         ft.wallet,
         MIN(firstTradeTime) AS first_trade,
         MAX(firstTradeTime) AS last_trade,
-        SUM(CASE WHEN is_valid THEN total_buy_sol ELSE 0 END) AS buy_sol,
-        SUM(CASE WHEN is_valid THEN total_sell_sol ELSE 0 END) AS sell_sol,
-        SUM(CASE WHEN is_valid THEN tokenProfit ELSE 0 END) AS totalProfit,
-        SUM(CASE WHEN is_valid THEN LN(pnl + 1) / LN(2) ELSE 0 END) / COUNT_IF(is_valid) AS pnl_log,
-        SUM(CASE WHEN is_valid THEN LN(hold_pnl + 1) / LN(2) ELSE 0 END) / COUNT_IF(is_valid) AS hold_pnl_log,
-        SUM(CASE WHEN is_valid THEN LN(ath_mc / first_buy_mc) / LN(2) ELSE 0 END) / COUNT_IF(is_valid) AS rise_log,
-        SUM(CASE WHEN is_valid THEN LN(valid_rise) / LN(2) ELSE 0 END) / COUNT_IF(is_valid) AS hold_rise_log,
-        (SUM(CASE WHEN is_valid THEN total_sell_sol ELSE 0 END) - SUM(CASE WHEN is_valid THEN total_buy_sol ELSE 0 END)) 
-            / NULLIF(SUM(CASE WHEN is_valid THEN total_buy_sol ELSE 0 END), 0) AS totalpnl,
-        COUNT_IF(is_valid) AS count,
-        COUNT_IF(is_valid AND (buy_count > 3 OR hold_time < 10 OR buy_rise > 1.4)) AS bad_count,
-        COUNT_IF(is_valid AND is_bundle = 1) AS bundle_count,
-        COUNT_IF(is_valid AND first_rise_duration >= 0) AS rise_rise,
-        COUNT_IF(is_valid AND first_rise_duration >= 0 AND first_rise_duration <= (SELECT rise_filter_time FROM constants)) AS rise_rise_filter,
-        COUNT_IF(is_valid AND first_dump_duration < valid_sell_duration AND first_dump_duration < first_2x_duration) AS dump_count,
-        COUNT_IF(is_valid AND first_2x_duration >= 0) AS rise_2x,
-        COUNT_IF(is_valid AND first_3x_duration >= 0) AS rise_3x,
-        COUNT_IF(is_valid AND first_5x_duration >= 0) AS rise_5x,
-        COUNT_IF(is_valid AND (first_3x_duration > 0 AND first_3x_duration < 600)) AS good_count,
-        COUNT_IF(is_valid AND first_dump_duration = -1 OR (first_2x_duration >= 0 AND first_2x_duration < first_dump_duration)) AS safe_count,
-        SUM(CASE WHEN is_valid THEN valid_rise ELSE 0 END) / COUNT_IF(is_valid) AS hold_rise_avg,
-        COUNT_IF(is_valid AND valid_rise >= 2) AS hold_rise_2x,
-        COUNT_IF(is_valid AND valid_rise >= 3) AS hold_rise_3x,
-        COUNT_IF(is_valid AND valid_rise >= 5) AS hold_rise_5x,
-        SUM(CASE WHEN is_valid AND first_2x_duration >= 0 THEN first_2x_duration ELSE 0 END) AS rise_2x_time,
-        SUM(CASE WHEN is_valid AND first_3x_duration >= 0 THEN first_3x_duration ELSE 0 END) AS rise_3x_time,
-        SUM(CASE WHEN is_valid AND first_5x_duration >= 0 THEN first_5x_duration ELSE 0 END) AS rise_5x_time,
-        SUM(CASE WHEN is_valid AND first_rise_duration >= 0 THEN first_rise_duration ELSE 0 END) AS rise_rise_time,
-        COUNT_IF(is_valid AND valid_rise >= 4 AND hold_pnl <= 1.5 AND is_buy_before_ath = 1) AS fake_seller,
-        COUNT_IF(is_valid AND pnl >= 0.8) AS pnl_1x,
-        COUNT_IF(is_valid AND pnl >= 2) AS pnl_2x,
-        COUNT_IF(is_valid AND pnl >= 3) AS pnl_3x,
-        COUNT_IF(is_valid AND is_mig = 1) AS mig_count,
-        SUM(CASE WHEN is_valid AND is_mig = 1 THEN mig_time ELSE 0 END) AS mig_time,
-        COUNT_IF(is_valid AND is_buy_before_ath = 1) AS buy_before_ath_count,
-        COUNT_IF(is_valid AND is_sell_after_mig = 1) AS sell_after_mig_count,
+        SUM(CASE WHEN is_real THEN total_buy_sol ELSE 0 END) AS buy_sol,
+        SUM(CASE WHEN is_real THEN total_sell_sol ELSE 0 END) AS sell_sol,
+        SUM(CASE WHEN is_real THEN tokenProfit ELSE 0 END) AS totalProfit,
+        SUM(CASE WHEN is_real THEN LN(pnl + 1) / LN(2) ELSE 0 END) / COUNT_IF(is_real) AS pnl_log,
+        SUM(CASE WHEN is_real THEN LN(hold_pnl + 1) / LN(2) ELSE 0 END) / COUNT_IF(is_real) AS hold_pnl_log,
+        SUM(CASE WHEN is_real THEN LN(ath_mc / first_buy_mc) / LN(2) ELSE 0 END) / COUNT_IF(is_real) AS rise_log,
+        SUM(CASE WHEN is_real THEN LN(valid_rise + 1) / LN(2) ELSE 0 END) / COUNT_IF(is_real) AS hold_rise_log,
+        (SUM(CASE WHEN is_real THEN total_sell_sol ELSE 0 END) - SUM(CASE WHEN is_real THEN total_buy_sol ELSE 0 END)) 
+            / NULLIF(SUM(CASE WHEN is_real THEN total_buy_sol ELSE 0 END), 0) AS totalpnl,
+        COUNT_IF(is_valid) AS count,        
+        COUNT_IF(is_real) AS real_count,
+        COUNT_IF(is_real AND (buy_count > 3 OR hold_time < 10 OR buy_rise > 1.4)) AS bad_count,
+        COUNT_IF(is_real AND (hold_time < 10)) AS eating_real_all_count,
+        COUNT_IF(hold_time < 10) AS eating_all_count,
+        COUNT_IF(is_real AND first_buy_to_first_sell_seconds IS NOT NULL AND first_buy_to_first_sell_seconds < 10) AS eating_real_count,
+        COUNT_IF(is_real AND is_bundle = 1) AS bundle_count,
+        COUNT_IF(is_real AND first_rise_duration >= 0) AS rise_rise,
+        COUNT_IF(is_real AND first_rise_duration >= 0 AND first_rise_duration <= (SELECT rise_filter_time FROM constants)) AS rise_rise_filter,
+        COUNT_IF(is_real AND first_dump_duration < valid_sell_duration AND first_dump_duration < first_2x_duration) AS dump_count,
+        COUNT_IF(is_real AND first_2x_duration >= 0) AS rise_2x,
+        COUNT_IF(is_real AND first_3x_duration >= 0) AS rise_3x,
+        COUNT_IF(is_real AND first_5x_duration >= 0) AS rise_5x,
+        COUNT_IF(is_real AND (first_3x_duration > 0 AND first_3x_duration < 600)) AS good_count,
+        COUNT_IF(is_real AND first_dump_duration = -1 OR (first_2x_duration >= 0 AND first_2x_duration < first_dump_duration)) AS safe_count,
+        SUM(CASE WHEN is_real THEN valid_rise ELSE 0 END) / COUNT_IF(is_real) AS hold_rise_avg,
+        COUNT_IF(is_real AND valid_rise >= 2) AS hold_rise_2x,
+        COUNT_IF(is_real AND valid_rise >= 3) AS hold_rise_3x,
+        COUNT_IF(is_real AND valid_rise >= 5) AS hold_rise_5x,
+        SUM(CASE WHEN is_real AND first_2x_duration >= 0 THEN first_2x_duration ELSE 0 END) AS rise_2x_time,
+        SUM(CASE WHEN is_real AND first_3x_duration >= 0 THEN first_3x_duration ELSE 0 END) AS rise_3x_time,
+        SUM(CASE WHEN is_real AND first_5x_duration >= 0 THEN first_5x_duration ELSE 0 END) AS rise_5x_time,
+        SUM(CASE WHEN is_real AND first_rise_duration >= 0 THEN first_rise_duration ELSE 0 END) AS rise_rise_time,
+        COUNT_IF(is_real AND valid_rise >= 4 AND hold_pnl <= 1.5 AND is_buy_before_ath = 1) AS fake_seller,
+        COUNT_IF(is_real AND pnl >= 0.8) AS pnl_1x,
+        COUNT_IF(is_real AND pnl >= 2) AS pnl_2x,
+        COUNT_IF(is_real AND pnl >= 3) AS pnl_3x,
+        COUNT_IF(is_real AND is_mig = 1) AS mig_count,
+        SUM(CASE WHEN is_real AND is_mig = 1 THEN mig_time ELSE 0 END) AS mig_time,
+        COUNT_IF(is_real AND is_buy_before_ath = 1) AS buy_before_ath_count,
+        COUNT_IF(is_real AND is_sell_after_mig = 1) AS sell_after_mig_count,
         COUNT(DISTINCT ft.token) AS token_count,
         COUNT_IF(first_buy_project = 'fourmeme' OR first_buy_project = 'flap') AS bonding_count,
-        COUNT_IF(is_valid AND (first_buy_project = 'fourmeme' OR first_buy_project = 'fourmeme-mig')) AS fourmeme_count,
-        COUNT_IF(is_valid AND (first_buy_project = 'flap' OR first_buy_project = 'flap-mig')) AS flap_count,
-        COUNT_IF(is_valid AND is_fake = 1) AS fake_count,
-        COUNT_IF(is_valid AND is_creator = 1) AS creator_count,
-        COUNT_IF(is_valid AND buy_rise > 1.3) AS follow_count,
-        SUM(CASE WHEN is_valid THEN (hold_pnl_metrics * 2 + valid_rise_metrics * 2 + hold_time_metrics + pnl_metrics + rise_metrics / 2 + buy_before_ath_metrics * 2 + buy_rise_metrics * 2) / 12.5 ELSE 0 END) AS total_metrics,
-        SUM(CASE WHEN is_valid AND dev_metrics > 0 THEN dev_metrics ELSE 0 END) - 
-            (2 * pow(2, COUNT_IF(is_valid AND dev_metrics < 0)) -1) AS devs_metrics,
+        COUNT_IF(is_real AND (first_buy_project = 'fourmeme' OR first_buy_project = 'fourmeme-mig')) AS fourmeme_count,
+        COUNT_IF(is_real AND (first_buy_project = 'flap' OR first_buy_project = 'flap-mig')) AS flap_count,
+        COUNT_IF(is_creator = 1) AS creator_count,
+        COUNT_IF(is_valid AND is_fake = 1) AS fake_valid_count,
+        COUNT_IF(is_fake = 1) AS fake_all_count,
+        COUNT_IF(is_real AND buy_rise > 1.3) AS follow_count,
+        SUM(CASE WHEN is_real THEN (age_metrics + mc_metrics * 2 + hold_pnl_metrics * 2 + valid_rise_metrics * 2 + hold_time_metrics + pnl_metrics + rise_metrics / 2 + buy_before_ath_metrics * 2 + buy_rise_metrics * 2) / 12.5 ELSE 0 END) AS total_metrics,
+        SUM(CASE WHEN is_real AND dev_metrics > 0 THEN dev_metrics ELSE 0 END) - 
+            (2 * pow(2, COUNT_IF(is_real AND dev_metrics < 0)) -1) AS devs_metrics,
         CASE 
-            WHEN SUM(CASE WHEN is_valid THEN 1.0 / NULLIF(valid_rise,0) ELSE 0 END) > 0
-            THEN COUNT_IF(is_valid) / SUM(CASE WHEN is_valid THEN 1.0 / NULLIF(valid_rise,0) ELSE 0 END)
+            WHEN SUM(CASE WHEN is_real THEN 1.0 / NULLIF(valid_rise,0) ELSE 0 END) > 0
+            THEN COUNT_IF(is_real) / SUM(CASE WHEN is_real THEN 1.0 / NULLIF(valid_rise,0) ELSE 0 END)
             ELSE NULL
         END AS harmonic_mean_calc_pnl
     FROM filteredTokens ft
@@ -633,39 +677,46 @@ results AS (
     SELECT
         wi.wallet,
         token_count,
+        count,              -- total filtered tokens except dev tokens--
+        real_count,  -- total filtered tokens except fake tokens and dev tokens--
+        fake_valid_count, -- fake valid token count --
+        fake_all_count, -- fake all token count --
+        mig_count, -- migrate count --
+        eating_real_count, -- real token first buy to first sell in 10 seconds --
+        eating_real_all_count, -- real token first buy to sell all in 10 seconds --
+        eating_all_count, -- first buy to sell all in 10 seconds --
+        dump_count,  --dump before first sell all or 2X --
+        creator_count, -- total creator token count --
+        CAST(ft.first_trade_bnb AS DATE) AS first_trade, -- first trade date on bnb --
+        CAST(last_trade AS DATE) AS last_trade, -- last trade date on solana --
         bonding_count,
-        count,
         fourmeme_count,
         flap_count,
         -- follow_count,
-        dump_count,
         -- good_count,
         -- safe_count,
         -- bad_count,
-        mig_count,
         -- fake_seller,
-        fake_count AS scam,
-        last_trade,
-        CASE WHEN count > 0 THEN mig_time / count ELSE 0 END AS avg_mig_time,
+        CASE WHEN real_count > 0 THEN mig_time / real_count ELSE 0 END AS avg_mig_time,
         hold_rise_avg,  
-        CASE WHEN count > 0 THEN hold_rise_2x * 100.0 / count ELSE 0 END AS hold_rise_2x,
-        CASE WHEN count > 0 THEN hold_rise_3x * 100.0 / count ELSE 0 END AS hold_rise_3x,
-        CASE WHEN count > 0 THEN hold_rise_5x * 100.0 / count ELSE 0 END AS hold_rise_5x,
-        CASE WHEN count > 0 THEN rise_rise * 100.0 / count ELSE 0 END AS rise_cond,
-        CASE WHEN count > 0 THEN rise_rise_filter * 100.0 / count ELSE 0 END AS rise_cond_met,
-        CASE WHEN count > 0 THEN rise_2x * 100.0 / count ELSE 0 END AS rise_2x,
+        CASE WHEN real_count > 0 THEN hold_rise_2x * 100.0 / real_count ELSE 0 END AS hold_rise_2x,
+        CASE WHEN real_count > 0 THEN hold_rise_3x * 100.0 / real_count ELSE 0 END AS hold_rise_3x,
+        CASE WHEN real_count > 0 THEN hold_rise_5x * 100.0 / real_count ELSE 0 END AS hold_rise_5x,
+        CASE WHEN real_count > 0 THEN rise_rise * 100.0 / real_count ELSE 0 END AS rise_cond,
+        CASE WHEN real_count > 0 THEN rise_rise_filter * 100.0 / real_count ELSE 0 END AS rise_cond_met,
+        CASE WHEN real_count > 0 THEN rise_2x * 100.0 / real_count ELSE 0 END AS rise_2x,
         CASE WHEN rise_2x > 0 THEN rise_2x_time / rise_2x ELSE 0 END AS r_2x_time,
-        CASE WHEN count > 0 THEN rise_3x * 100.0 / count ELSE 0 END AS rise_3x,
+        CASE WHEN real_count > 0 THEN rise_3x * 100.0 / real_count ELSE 0 END AS rise_3x,
         CASE WHEN rise_3x > 0 THEN rise_3x_time / rise_3x ELSE 0 END AS r_3x_time,
-        CASE WHEN count > 0 THEN rise_5x * 100.0 / count ELSE 0 END AS rise_5x,
+        CASE WHEN real_count > 0 THEN rise_5x * 100.0 / real_count ELSE 0 END AS rise_5x,
         CASE WHEN rise_5x > 0 THEN rise_5x_time / rise_5x ELSE 0 END AS r_5x_time,
-        CASE WHEN count > 0 THEN pnl_2x * 100.0 / count ELSE 0 END AS pnl_2x,   
-        CASE WHEN count > 0 THEN pnl_3x * 100.0/ count ELSE 0 END AS pnl_3x,
-        CASE WHEN count > 0 THEN bundle_count * 100.0 / count ELSE 0 END AS bundle_ratio,
-        CASE WHEN count > 0 THEN mig_count * 100.0 / count ELSE 0 END AS mig_ratio,
-        CASE WHEN count > 0 THEN buy_before_ath_count * 100.0 / count ELSE 0 END AS buy_before_ath,
-        CASE WHEN count > 0 THEN sell_after_mig_count * 100.0 / count ELSE 0 END AS sell_after_mig,
-        CASE WHEN count > 0 THEN pnl_1x * 100.0 / count ELSE 0 END AS win_rate,
+        CASE WHEN real_count > 0 THEN pnl_2x * 100.0 / real_count ELSE 0 END AS pnl_2x,   
+        CASE WHEN real_count > 0 THEN pnl_3x * 100.0/ real_count ELSE 0 END AS pnl_3x,
+        CASE WHEN real_count > 0 THEN bundle_count * 100.0 / count ELSE 0 END AS bundle_ratio,
+        CASE WHEN real_count > 0 THEN mig_count * 100.0 / count ELSE 0 END AS mig_ratio,
+        CASE WHEN real_count > 0 THEN buy_before_ath_count * 100.0 / real_count ELSE 0 END AS buy_before_ath,
+        CASE WHEN real_count > 0 THEN sell_after_mig_count * 100.0 / real_count ELSE 0 END AS sell_after_mig,
+        CASE WHEN real_count > 0 THEN pnl_1x * 100.0 / real_count ELSE 0 END AS win_rate,
         totalProfit,
         buy_sol,
         sell_sol,
@@ -674,26 +725,41 @@ results AS (
         rise_log,
         hold_rise_log,
         hold_pnl_log,
-        creator_count,
-        CASE WHEN count > 0 THEN creator_count * 100.0 / count ELSE 0 END AS creator_ratio,
-        CASE WHEN count > 0 THEN total_metrics / count ELSE 0 END AS total_metrics,
-        CASE WHEN count > 0 THEN devs_metrics / count ELSE 0 END AS dev_metrics,
+        CASE WHEN token_count > 0 THEN creator_count * 100.0 / token_count ELSE 0 END AS creator_ratio,
+        CASE WHEN real_count > 0 THEN total_metrics / real_count ELSE 0 END AS total_metrics,
+        CASE WHEN real_count > 0 THEN devs_metrics / real_count ELSE 0 END AS dev_metrics,
+        CASE WHEN token_count > 0 THEN fake_all_count * 100.0 / token_count ELSE 0 END AS fake_all_ratio,
+        CASE WHEN count > 0 THEN fake_valid_count * 100.0 / count ELSE 0 END AS fake_valid_ratio,
+        CASE WHEN token_count > 0 THEN eating_all_count * 100.0 / token_count ELSE 0 END AS eating_all_ratio,
         harmonic_mean_calc_pnl
     FROM walletInfo wi
+    LEFT JOIN LATERAL (
+        SELECT MIN(block_time) AS first_trade_bnb
+        FROM dex.trades
+        WHERE block_time >= (NOW() - INTERVAL '120' day)
+            AND blockchain = 'bnb'
+            AND tx_from = wi.wallet
+    ) ft ON TRUE
 )
 SELECT
     r.*,
     ROW_NUMBER() OVER (ORDER BY r.total_metrics DESC) AS row_num
 FROM results r
 WHERE 
-    r.count >= 2
-    AND r.count <= 15
+    r.real_count >=1
+    AND r.real_count <= 15
     AND r.token_count <= 20
-    AND r.creator_count <= 1
-    AND r.scam <= 1
-    AND r.rise_2x >= 30
-    AND r.rise_3x > 0
-    AND r.rise_cond_met > 0
+    AND r.creator_count <= 3
+    AND r.creator_ratio <= 25 -- all token creator ratio should be smaller than 25%--
+    AND r.eating_all_count <= 5 -- all eating token count should be smaller than 5--
+    AND r.eating_real_all_count <= 3 -- real eating token count should be smaller than 3--
+    AND r.eating_all_ratio <= 30 -- all eating token ratio should be smaller than 30%--
+    AND r.fake_valid_count <= 2 -- fake real token count should be smaller than 2--
+    AND r.fake_valid_ratio <= 30 -- fake real token ratio should be smaller than 30%--
+    AND r.fake_all_count <= 4 -- all token fake count should be smaller than 5--
+    AND r.fake_all_ratio <= 30 -- all token fake ratio should be smaller than 30%--
+    AND r.rise_2x >= 50 -- real token rise 2x ratio should be greater than 50%--
+    AND r.rise_3x > 0 -- real token rise 3x ratio should be greater than 0--
     -- AND r.good_count >= 2
     -- AND r.bonding_count > 5
     -- AND r.rise_cond_met >= 50
